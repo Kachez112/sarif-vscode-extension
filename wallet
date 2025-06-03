@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Seed-Recovery Assistant (Web)</title>
+  <!-- bip39 library (for generateMnemonic) -->
+  <script src="https://cdn.jsdelivr.net/npm/bip39@3.0.4/index.js"></script>
+  <!-- CryptoJS (for SHA-256) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 2rem auto;
+      line-height: 1.5;
+    }
+    h1 {
+      text-align: center;
+    }
+    .section {
+      border: 1px solid #ddd;
+      padding: 1rem;
+      margin-bottom: 2rem;
+      border-radius: 6px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    label {
+      display: block;
+      margin: 0.5rem 0;
+    }
+    .word-checkbox {
+      display: inline-block;
+      width: 30%;
+      margin-bottom: 0.25rem;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      border: none;
+      background: #007bff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    button:disabled {
+      background: #aaa;
+      cursor: not-allowed;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      margin: 0.25rem 0 1rem 0;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    pre {
+      background: #f8f8f8;
+      padding: 1rem;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Seed-Recovery Assistant (Web)</h1>
+
+  <!-- ===== SECTION 1: Generate & Store Seed ===== -->
+  <div class="section" id="generate-section">
+    <h2>1. Generate & Store Your Seed</h2>
+    <button id="btn-generate">Generate New 12-Word Seed</button>
+
+    <div id="seed-container" style="display: none; margin-top: 1rem;">
+      <p><strong>Your 12-word seed phrase:</strong></p>
+      <pre id="seed-phrase"></pre>
+
+      <p>
+        <em>Select exactly 3 words (any 3) that you will remember later, then click “Store Seed”.</em><br>
+        (We’ll hash those 3 words and store them in <code>localStorage</code> together with the full seed.)
+      </p>
+
+      <div id="checkbox-list"></div>
+
+      <button id="btn-store" disabled>Store Seed in Browser</button>
+      <p id="store-status" style="color: green; font-weight: bold; display: none;">
+        ✓ Seed stored under your chosen 3 words!
+      </p>
+    </div>
+  </div>
+
+  <!-- ===== SECTION 2: Recover Seed by Entering 3 Words ===== -->
+  <div class="section" id="recover-section">
+    <h2>2. Recover Your Seed (Enter the 3 Words)</h2>
+    <p>Type in the exact 3 words you remembered (in any order). Click “Recover Seed”.</p>
+    <label for="input-word1">Word 1</label>
+    <input type="text" id="input-word1" autocomplete="off" />
+
+    <label for="input-word2">Word 2</label>
+    <input type="text" id="input-word2" autocomplete="off" />
+
+    <label for="input-word3">Word 3</label>
+    <input type="text" id="input-word3" autocomplete="off" />
+
+    <button id="btn-recover">Recover Seed</button>
+    <p id="recover-result" style="margin-top: 1rem; font-weight: bold;"></p>
+  </div>
+
+  <script>
+    // --- UTILITY: SHA-256 of a UTF-8 string, returns hex ---
+    function sha256_hex(str) {
+      return CryptoJS.SHA256(CryptoJS.enc.Utf8.parse(str)).toString(CryptoJS.enc.Hex);
+    }
+
+    // Generate a 12-word BIP-39 mnemonic, display it, and create checkboxes.
+    document.getElementById('btn-generate').addEventListener('click', () => {
+      // 1. Generate 12-word mnemonic (128 bits of entropy)
+      const mnemonic = bip39.generateMnemonic(128);
+      document.getElementById('seed-phrase').innerText = mnemonic;
+      document.getElementById('seed-container').style.display = 'block';
+
+      // 2. Build checkboxes for each word
+      const words = mnemonic.split(' ');
+      const container = document.getElementById('checkbox-list');
+      container.innerHTML = ''; // clear if exists
+
+      words.forEach((w, idx) => {
+        const div = document.createElement('div');
+        div.className = 'word-checkbox';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = `cb-${idx}`;
+        cb.dataset.word = w;
+        cb.addEventListener('change', updateStoreButtonState);
+
+        const lbl = document.createElement('label');
+        lbl.setAttribute('for', `cb-${idx}`);
+        lbl.innerText = `${idx + 1}. ${w}`;
+
+        div.appendChild(cb);
+        div.appendChild(lbl);
+        container.appendChild(div);
+      });
+
+      // Disable “Store” until exactly 3 are checked
+      updateStoreButtonState();
+    });
+
+    // Enable “Store Seed” only when exactly 3 boxes are checked
+    function updateStoreButtonState() {
+      const checkedCount = document.querySelectorAll('#checkbox-list input[type="checkbox"]:checked').length;
+      document.getElementById('btn-store').disabled = (checkedCount !== 3);
+    }
+
+    // When clicking “Store Seed”, read the 3 words, hash them, save mapping in localStorage
+    document.getElementById('btn-store').addEventListener('click', () => {
+      const checkedBoxes = document.querySelectorAll('#checkbox-list input[type="checkbox"]:checked');
+      if (checkedBoxes.length !== 3) return; // guard
+
+      // 1) Get the 3 words into an array, sort alphabetically (so order doesn’t matter on recovery)
+      const threeWords = Array.from(checkedBoxes).map(cb => cb.dataset.word);
+      threeWords.sort((a, b) => a.localeCompare(b, 'en')); // lex order
+      const combo = threeWords.join('_'); // e.g. "apple_drift_token"
+      const comboHash = sha256_hex(combo);
+
+      // 2) Store in localStorage: key = comboHash, value = full mnemonic
+      const fullSeed = document.getElementById('seed-phrase').innerText.trim();
+      localStorage.setItem(comboHash, fullSeed);
+
+      // 3) Show a status message
+      document.getElementById('store-status').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('store-status').style.display = 'none';
+      }, 4000);
+    });
+
+    // Recover: read inputs, sort them, hash, look up in localStorage
+    document.getElementById('btn-recover').addEventListener('click', () => {
+      const w1 = document.getElementById('input-word1').value.trim().toLowerCase();
+      const w2 = document.getElementById('input-word2').value.trim().toLowerCase();
+      const w3 = document.getElementById('input-word3').value.trim().toLowerCase();
+      const resultEl = document.getElementById('recover-result');
+      resultEl.style.color = 'red';
+
+      if (!w1 || !w2 || !w3) {
+        resultEl.innerText = 'Please fill in all three words.';
+        return;
+      }
+
+      // 1) Sort alphabetically
+      const arr = [w1, w2, w3].sort((a,b) => a.localeCompare(b, 'en'));
+      const combo = arr.join('_'); 
+      const comboHash = sha256_hex(combo);
+
+      // 2) Look up in localStorage
+      const storedSeed = localStorage.getItem(comboHash);
+      if (storedSeed) {
+        resultEl.style.color = 'green';
+        resultEl.innerText = '✓ Seed Found:\n' + storedSeed;
+      } else {
+        resultEl.innerText = '✗ No matching seed found for those 3 words.';
+      }
+    });
+  </script>
+</body>
+</html>
